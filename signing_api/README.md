@@ -12,7 +12,9 @@ The normal DocuSeal Rails application/UI is not exposed in this service deployme
 
 ## Deployment
 
-Build `signing_api/Dockerfile` from the repository root. Mount durable storage at
+Build `signing_api/Dockerfile` from the repository root. For Fly, run
+`fly deploy . --remote-only --ha=false --config fly.signing.toml` from that root.
+Mount durable storage at
 `/data/docuseal/signing` owned by uid 2000. Run one machine for this volume (no
 independent replicas). Provider volume snapshots and an operator backup are
 required. The calling application additionally archives original, signed file,
