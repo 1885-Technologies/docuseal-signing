@@ -32,6 +32,8 @@ def request(app, method, id, body = nil, auth = 'Bearer ' + 'x' * 40)
              'HTTP_AUTHORIZATION' => auth, 'rack.input' => StringIO.new(body ? JSON.generate(body) : '') })
 end
 
+# One end-to-end lifecycle deliberately shares one temporary durable store.
+# rubocop:disable Metrics/BlockLength
 Dir.mktmpdir do |dir|
   args = { directory: dir, token: 'x' * 40, key: key.to_pem, certificate: cert.to_pem, identities: { user => identity } }
   api = SigningApi.new(**args)
@@ -73,3 +75,5 @@ Dir.mktmpdir do |dir|
   File.binwrite('/tmp/test-certificate.pem', cert.to_pem)
 end
 puts 'PASS: authentication, identity/tenant bounds, hash checks, signature verification, audit, idempotency/restart, tamper detection, unsigned-only input'
+
+# rubocop:enable Metrics/BlockLength

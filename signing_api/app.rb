@@ -67,52 +67,65 @@ class SigningApi
 
     input = JSON.parse(raw)
     pdf = validate(input)
-    # Hash canonical validated fields; JSON property ordering cannot create a new operation.
-    request_hash = Digest::SHA256.hexdigest(JSON.generate(input.sort.to_h))
-    File.open(File.join(@directory, "#{id}.lock"), File::RDWR | File::CREAT, 0o600) do |lock|
-      return response(409, { error: 'Operation busy; reconcile with GET' }) unless lock.flock(File::LOCK_EX | File::LOCK_NB)
+    execute(id, input, pdf)
 
-      path = File.join(@directory, "#{id}.json")
-      if File.file?(path)
-        previous = JSON.parse(File.binread(path))
-        return response(409, { error: 'Operation ID already belongs to different input' }) unless previous['request_sha256'] == request_hash
-
-        return response(200, previous)
-      end
-      completed_at = Time.now.utc.iso8601
-      evidence = input.except('pdf').merge('operation_id' => id, 'completed_at' => completed_at,
-                 'certificate_sha256' => @fingerprint,
-                 'signature_type' => 'automated_service_certificate',
-                 'attribution' => 'Powered by DocuSeal')
-      reason = "Automated document service; responsible: #{input['signer_name']}; operation: #{id}"
-      signed = sign(pdf, reason)
-      evidence['signed_sha256'] = Digest::SHA256.hexdigest(signed)
-      audit = sign(audit_pdf(evidence), "Automated signing audit; operation: #{id}")
-      result = evidence.merge('status' => 'completed', 'request_sha256' => request_hash,
-                              'signed_pdf' => Base64.strict_encode64(signed),
-                              'audit_pdf' => Base64.strict_encode64(audit),
-                              'audit_sha256' => Digest::SHA256.hexdigest(audit))
-      # Durable atomic publication. A crash before rename has no externally visible result;
-      # a retry with the SAME operation ID is safe. No invitation/SMTP code is invoked.
-      temp = "#{path}.#{SecureRandom.hex(8)}.tmp"
-      begin
-        File.open(temp, File::WRONLY | File::CREAT | File::EXCL, 0o600) do |f|
-          f.write(JSON.generate(result))
-          f.flush
-          f.fsync
-        end
-        File.rename(temp, path)
-        File.open(@directory) { |d| d.fsync }
-      ensure
-        File.unlink(temp) if File.exist?(temp)
-      end
-      response(200, result)
-    end
   rescue JSON::ParserError, ArgumentError, KeyError, HexaPDF::Error
     response(422, { error: 'Invalid signing request or PDF' })
   rescue StandardError => e
     warn "Signing operation failed (#{e.class})" # no documents, tokens, identities, URLs
     response(503, { error: 'Signing unavailable; reconcile the same operation ID' })
+  end
+
+  def execute(id, input, pdf)
+    request_hash = Digest::SHA256.hexdigest(JSON.generate(input.sort.to_h))
+    File.open(File.join(@directory, "#{id}.lock"), File::RDWR | File::CREAT, 0o600) do |lock|
+      unless lock.flock(File::LOCK_EX | File::LOCK_NB)
+        return response(409, { error: 'Operation busy; reconcile with GET' })
+      end
+      path = File.join(@directory, "#{id}.json")
+      return existing(path, request_hash) if File.file?(path)
+
+      result = complete(id, input, pdf).merge('request_sha256' => request_hash)
+      persist(path, result)
+      response(200, result)
+    end
+  end
+
+  def existing(path, request_hash)
+    previous = JSON.parse(File.binread(path))
+    unless previous['request_sha256'] == request_hash
+      return response(409, { error: 'Operation ID already belongs to different input' })
+    end
+    response(200, previous)
+  end
+
+  def complete(id, input, pdf)
+    evidence = input.except('pdf').merge('operation_id' => id, 'completed_at' => Time.now.utc.iso8601,
+                                       'certificate_sha256' => @fingerprint,
+                                       'signature_type' => 'automated_service_certificate',
+                                       'attribution' => 'Powered by DocuSeal')
+    reason = "Automated document service; responsible: #{input['signer_name']}; operation: #{id}"
+    signed = sign(pdf, reason)
+    evidence['signed_sha256'] = Digest::SHA256.hexdigest(signed)
+    audit = sign(audit_pdf(evidence), "Automated signing audit; operation: #{id}")
+    evidence.merge('status' => 'completed', 'signed_pdf' => Base64.strict_encode64(signed),
+                   'audit_pdf' => Base64.strict_encode64(audit),
+                   'audit_sha256' => Digest::SHA256.hexdigest(audit))
+  end
+
+  def persist(path, result)
+    temp = "#{path}.#{SecureRandom.hex(8)}.tmp"
+    begin
+      File.open(temp, File::WRONLY | File::CREAT | File::EXCL, 0o600) do |f|
+        f.write(JSON.generate(result))
+        f.flush
+        f.fsync
+      end
+      File.rename(temp, path)
+      File.open(@directory, &:fsync)
+    ensure
+      FileUtils.rm_f(temp)
+    end
   end
 
   def validate(input)
@@ -124,6 +137,10 @@ class SigningApi
     raise ArgumentError unless identity['tenant_id'] == input['tenant_id'] && identity['name'] == input['signer_name'] && identity['email'] == input['signer_email']
     raise ArgumentError unless input['authority_ref'] == identity['authority_ref']
     raise ArgumentError unless @certificate.not_before <= Time.now && Time.now < @certificate.not_after
+    decode_pdf(input)
+  end
+
+  def decode_pdf(input)
     pdf = Base64.strict_decode64(input['pdf'])
     raise ArgumentError unless pdf.start_with?('%PDF-') && pdf.bytesize <= 25_000_000 && Digest::SHA256.hexdigest(pdf) == input['original_sha256']
 
