@@ -20,7 +20,7 @@ require_relative '../lib/verify_pdf_signature'
 require_relative '../config/initializers/hexapdf'
 
 class SigningApi
-  SOURCE = 'https://github.com/1885-Technologies/docuseal-signing/tree/feature/automated-signing-api'
+  SOURCE = 'https://github.com/1885-Technologies/docuseal-signing'
   MAX_BODY = 36_000_000
   UUID = /\A[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\z/
 
