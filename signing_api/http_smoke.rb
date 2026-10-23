@@ -18,18 +18,16 @@ Dir.mktmpdir do |dir|
   env = { 'SIGNING_DATA_DIR' => dir, 'SIGNING_KEY_PEM' => key.to_pem,
           'SIGNING_CERT_PEM' => cert.to_pem, 'SIGNING_API_TOKEN' => 'x' * 40,
           'SIGNING_IDENTITIES_JSON' => '{}' }
-  pid = Process.spawn(env, '/bin/sh', '/app/signing_api/start.sh', pgroup: true,
-                      out: '/tmp/http-smoke.log', err: '/tmp/http-smoke.log')
+  output = { pgroup: true, out: '/tmp/http-smoke.log', err: '/tmp/http-smoke.log' }
+  pid = Process.spawn(env, '/bin/sh', '/app/signing_api/start.sh', **output)
   begin
     ready = false
     30.times do
-      begin
-        response = Net::HTTP.get_response(URI('http://127.0.0.1:3000/healthz'))
-        ready = response.code == '200'
-        break if ready
-      rescue Errno::ECONNREFUSED
-        sleep 0.5
-      end
+      response = Net::HTTP.get_response(URI('http://127.0.0.1:3000/healthz'))
+      ready = response.code == '200'
+      break if ready
+    rescue Errno::ECONNREFUSED
+      sleep 0.5
     end
     raise "Server failed to start: #{File.read('/tmp/http-smoke.log')}" unless ready
 
