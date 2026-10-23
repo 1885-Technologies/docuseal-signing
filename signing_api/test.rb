@@ -18,7 +18,7 @@ cert.not_before = Time.now.utc - 60
 cert.not_after = Time.now.utc + 3600
 cert.sign(key, OpenSSL::Digest.new('SHA256'))
 tenant, user, doc, operation = Array.new(4) { SecureRandom.uuid }
-authority = ('Automated test only with a long authority reference ' * 5) + 'END-OF-REFERENCE'
+authority = "#{'Automated test only with a long authority reference ' * 5}END-OF-REFERENCE"
 identity = { 'tenant_id' => tenant, 'name' => 'Test Leitung', 'email' => 'test@example.invalid',
              'authority_ref' => authority }
 pdf = HexaPDF::Document.new
