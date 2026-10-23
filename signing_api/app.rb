@@ -42,12 +42,17 @@ class SigningApi
   end
 
   def call(env)
-    return response(200, { service: 'DocuSeal automated signing API', source: SOURCE }) if env['PATH_INFO'] == '/healthz'
-    return response(200, { attribution: 'Powered by DocuSeal', license: 'AGPL-3.0', source: SOURCE }) if env['PATH_INFO'] == '/source'
+    if env['PATH_INFO'] == '/healthz'
+      return response(200,
+                      { service: 'DocuSeal automated signing API', source: SOURCE })
+    end
+    if env['PATH_INFO'] == '/source'
+      return response(200,
+                      { attribution: 'Powered by DocuSeal', license: 'AGPL-3.0',
+                        source: SOURCE })
+    end
 
-    auth = env['HTTP_AUTHORIZATION'].to_s
-    expected = "Bearer #{@token}"
-    return response(401, { error: 'Unauthorized' }) unless auth.bytesize == expected.bytesize && OpenSSL.fixed_length_secure_compare(auth, expected)
+    return response(401, { error: 'Unauthorized' }) unless authorized?(env)
 
     match = %r{\A/operations/([^/]+)\z}.match(env['PATH_INFO'])
     return response(404, { error: 'Not found' }) unless match && UUID.match?(match[1])
@@ -65,15 +70,24 @@ class SigningApi
     raw = env['rack.input'].read(MAX_BODY + 1)
     return response(413, { error: 'Payload too large' }) if raw.bytesize > MAX_BODY
 
-    input = JSON.parse(raw)
-    pdf = validate(input)
-    execute(id, input, pdf)
-
+    process(id, raw)
   rescue JSON::ParserError, ArgumentError, KeyError, HexaPDF::Error
     response(422, { error: 'Invalid signing request or PDF' })
   rescue StandardError => e
     warn "Signing operation failed (#{e.class})" # no documents, tokens, identities, URLs
     response(503, { error: 'Signing unavailable; reconcile the same operation ID' })
+  end
+
+  def process(id, raw)
+    input = JSON.parse(raw)
+    pdf = validate(input)
+    execute(id, input, pdf)
+  end
+
+  def authorized?(env)
+    auth = env['HTTP_AUTHORIZATION'].to_s
+    expected = "Bearer #{@token}"
+    auth.bytesize == expected.bytesize && OpenSSL.fixed_length_secure_compare(auth, expected)
   end
 
   def execute(id, input, pdf)
@@ -82,6 +96,7 @@ class SigningApi
       unless lock.flock(File::LOCK_EX | File::LOCK_NB)
         return response(409, { error: 'Operation busy; reconcile with GET' })
       end
+
       path = File.join(@directory, "#{id}.json")
       return existing(path, request_hash) if File.file?(path)
 
@@ -96,14 +111,15 @@ class SigningApi
     unless previous['request_sha256'] == request_hash
       return response(409, { error: 'Operation ID already belongs to different input' })
     end
+
     response(200, previous)
   end
 
   def complete(id, input, pdf)
     evidence = input.except('pdf').merge('operation_id' => id, 'completed_at' => Time.now.utc.iso8601,
-                                       'certificate_sha256' => @fingerprint,
-                                       'signature_type' => 'automated_service_certificate',
-                                       'attribution' => 'Powered by DocuSeal')
+                                         'certificate_sha256' => @fingerprint,
+                                         'signature_type' => 'automated_service_certificate',
+                                         'attribution' => 'Powered by DocuSeal')
     reason = "Automated document service; responsible: #{input['signer_name']}; operation: #{id}"
     signed = sign(pdf, reason)
     evidence['signed_sha256'] = Digest::SHA256.hexdigest(signed)
@@ -129,27 +145,35 @@ class SigningApi
   end
 
   def validate(input)
-    keys = %w[pdf original_sha256 tenant_id document_id signer_id signer_name signer_email assignment_sha256 authority_ref]
+    keys = %w[pdf original_sha256 tenant_id document_id signer_id signer_name signer_email assignment_sha256
+              authority_ref]
     raise ArgumentError unless input.is_a?(Hash) && input.keys.sort == keys.sort
     raise ArgumentError unless %w[tenant_id document_id signer_id].all? { |k| UUID.match?(input[k].to_s) }
-    raise ArgumentError unless %w[original_sha256 assignment_sha256].all? { |k| /\A[0-9a-f]{64}\z/.match?(input[k].to_s) }
+    raise ArgumentError unless %w[original_sha256 assignment_sha256].all? do |k|
+      /\A[0-9a-f]{64}\z/.match?(input[k].to_s)
+    end
+
     identity = @identities.fetch(input['signer_id'])
-    raise ArgumentError unless identity['tenant_id'] == input['tenant_id'] && identity['name'] == input['signer_name'] && identity['email'] == input['signer_email']
+    raise ArgumentError unless identity['tenant_id'] == input['tenant_id']
+    raise ArgumentError unless identity['name'] == input['signer_name'] && identity['email'] == input['signer_email']
     raise ArgumentError unless input['authority_ref'] == identity['authority_ref']
-    raise ArgumentError unless @certificate.not_before <= Time.now && Time.now < @certificate.not_after
+    raise ArgumentError unless @certificate.not_before <= Time.now.utc && Time.now.utc < @certificate.not_after
+
     decode_pdf(input)
   end
 
   def decode_pdf(input)
     pdf = Base64.strict_decode64(input['pdf'])
-    raise ArgumentError unless pdf.start_with?('%PDF-') && pdf.bytesize <= 25_000_000 && Digest::SHA256.hexdigest(pdf) == input['original_sha256']
+    unless pdf.start_with?('%PDF-') && pdf.bytesize <= 25_000_000 && Digest::SHA256.hexdigest(pdf) == input['original_sha256']
+      raise ArgumentError
+    end
 
     pdf
   end
 
   def sign(bytes, reason)
     pdf = HexaPDF::Document.new(io: StringIO.new(bytes))
-    raise ArgumentError if pdf.pages.count.zero? || pdf.pages.count > 100 || pdf.encrypted? || pdf.signatures.count.positive?
+    raise ArgumentError if pdf.pages.none? || pdf.pages.count > 100 || pdf.encrypted? || pdf.signatures.any?
 
     pkcs = Struct.new(:certificate, :key, :ca_certs).new(@certificate, @key, [])
     params = Submissions::GenerateResultAttachments.build_signing_params(nil, pkcs, nil)
@@ -163,14 +187,17 @@ class SigningApi
 
   def verify!(bytes)
     doc = HexaPDF::Document.new(io: StringIO.new(bytes))
-    raise ArgumentError unless doc.signatures.count == 1
+    raise ArgumentError unless doc.signatures.one?
+
     signature = doc.signatures.first
     ranges = signature[:ByteRange]
     raise ArgumentError unless ranges[0].zero? && ranges[2] + ranges[3] == bytes.bytesize
+
     content = bytes.byteslice(ranges[0], ranges[1]) + bytes.byteslice(ranges[2], ranges[3])
     pkcs = OpenSSL::PKCS7.new(signature[:Contents])
     raise ArgumentError unless VerifyPdfSignature.trusted_certificate?(pkcs, [@certificate]) &&
                                VerifyPdfSignature.verify_contents(pkcs, content, [@certificate])
+
     true
   end
 
@@ -185,7 +212,7 @@ class SigningApi
              'Responsible person is recorded from the calling application assignment.', '']
     evidence.each { |k, v| lines << "#{k}: #{v}" }
     lines << '' << "Source: #{SOURCE}"
-    lines.each_with_index { |line, i| canvas.text(line, at: [35, 800 - 20 * i]) }
+    lines.each_with_index { |line, i| canvas.text(line, at: [35, 800 - (20 * i)]) }
     output = StringIO.new
     doc.write(output)
     output.string

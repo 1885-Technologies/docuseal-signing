@@ -3,5 +3,5 @@ FROM docuseal/docuseal@sha256:28d0ca583860e2c73e5b068756023a93a325799a22da1f7883
 COPY --chown=docuseal:docuseal signing_api /app/signing_api
 WORKDIR /app
 ENV RACK_ENV=production
-USER docuseal
-CMD ["/app/bin/bundle", "exec", "puma", "-b", "tcp://0.0.0.0:3000", "-t", "1:2", "signing_api/config.ru"]
+USER root
+CMD ["/bin/sh", "/app/signing_api/start.sh"]
