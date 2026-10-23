@@ -1,0 +1,38 @@
+name: Signing API
+on:
+  pull_request:
+  push:
+    branches: [master, feature/automated-signing-api]
+permissions:
+  contents: read
+jobs:
+  signing:
+    name: Cryptographic signing and isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f signing_api/Dockerfile -t signing-api .
+      - name: Verify actual PDF signatures and idempotency
+        run: |
+          docker create --name signing-test --entrypoint /app/bin/bundle signing-api exec ruby signing_api/test.rb
+          docker start -a signing-test
+          test "$(docker inspect signing-test --format '{{.State.ExitCode}}')" = 0
+          mkdir -p verification
+          docker cp signing-test:/tmp/signed-test.pdf verification/
+          docker cp signing-test:/tmp/audit-test.pdf verification/
+          docker cp signing-test:/tmp/original-test.pdf verification/
+          docker cp signing-test:/tmp/test-certificate.pem verification/
+      - name: Independent PDF signature and visual verification
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils
+          pdfsig verification/signed-test.pdf | tee verification/pdfsig.txt
+          grep -q 'Signature Validation: Signature is Valid' verification/pdfsig.txt
+          pdftoppm -png -r 80 -singlefile verification/original-test.pdf verification/original
+          pdftoppm -png -r 80 -singlefile verification/signed-test.pdf verification/signed
+          cmp verification/original.png verification/signed.png
+          pdftoppm -png -r 100 -singlefile verification/audit-test.pdf verification/audit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signing-verification
+          path: verification/
