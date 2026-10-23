@@ -73,10 +73,9 @@ Dir.mktmpdir do |dir|
     rejected = true
   end
   assert(rejected, 'Tampered PDF accepted')
-  assert(
-    request(api, 'POST', SecureRandom.uuid,
-            input.merge('pdf' => Base64.strict_encode64(signed), 'original_sha256' => Digest::SHA256.hexdigest(signed)))[0] == 422, 'Already signed PDF accepted'
-  )
+  signed_input = input.merge('pdf' => Base64.strict_encode64(signed),
+                             'original_sha256' => Digest::SHA256.hexdigest(signed))
+  assert(request(api, 'POST', SecureRandom.uuid, signed_input)[0] == 422, 'Already signed PDF accepted')
   File.binwrite('/tmp/signed-test.pdf', signed)
   File.binwrite('/tmp/audit-test.pdf', audit)
   File.binwrite('/tmp/original-test.pdf', io.string)

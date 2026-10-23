@@ -164,9 +164,8 @@ class SigningApi
 
   def decode_pdf(input)
     pdf = Base64.strict_decode64(input['pdf'])
-    unless pdf.start_with?('%PDF-') && pdf.bytesize <= 25_000_000 && Digest::SHA256.hexdigest(pdf) == input['original_sha256']
-      raise ArgumentError
-    end
+    raise ArgumentError unless pdf.start_with?('%PDF-') && pdf.bytesize <= 25_000_000
+    raise ArgumentError unless Digest::SHA256.hexdigest(pdf) == input['original_sha256']
 
     pdf
   end
