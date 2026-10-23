@@ -202,19 +202,16 @@ class SigningApi
 
   def audit_pdf(evidence)
     # Audit is machine-readable and signed, separate from the untouched reminder pages.
-    doc = HexaPDF::Document.new
-    canvas = doc.pages.add.canvas
+    composer = HexaPDF::Composer.new(margin: 35)
     font_path = Submissions::GenerateResultAttachments::FONT_PATH
-    canvas.font(File.exist?(font_path) ? font_path : 'Helvetica', size: 10)
+    composer.style(:base, font: File.exist?(font_path) ? font_path : 'Helvetica', font_size: 10)
     lines = ['Automated document signature / DocuSeal',
              'Service certificate; no personal signing ceremony or qualified signature.',
              'Responsible person is recorded from the calling application assignment.', '']
     evidence.each { |k, v| lines << "#{k}: #{v}" }
     lines << '' << "Source: #{SOURCE}"
-    lines.each_with_index { |line, i| canvas.text(line, at: [35, 800 - (20 * i)]) }
-    output = StringIO.new
-    doc.write(output)
-    output.string
+    lines.each { |line| composer.text(line, margin: [0, 0, 10]) }
+    composer.write_to_string
   end
 
   def headers

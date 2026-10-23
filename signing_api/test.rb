@@ -18,8 +18,9 @@ cert.not_before = Time.now.utc - 60
 cert.not_after = Time.now.utc + 3600
 cert.sign(key, OpenSSL::Digest.new('SHA256'))
 tenant, user, doc, operation = Array.new(4) { SecureRandom.uuid }
+authority = "#{'Automated test only with a long authority reference ' * 5}END-OF-REFERENCE"
 identity = { 'tenant_id' => tenant, 'name' => 'Test Leitung', 'email' => 'test@example.invalid',
-             'authority_ref' => 'Automated test only' }
+             'authority_ref' => authority }
 pdf = HexaPDF::Document.new
 pdf.pages.add.canvas.font('Helvetica', size: 12).text('Dunning document TEST ONLY', at: [50, 700])
 io = StringIO.new

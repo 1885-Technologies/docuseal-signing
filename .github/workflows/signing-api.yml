@@ -33,6 +33,17 @@ jobs:
           pdftoppm -png -r 80 -singlefile verification/signed-test.pdf verification/signed
           cmp verification/original.png verification/signed.png
           pdftoppm -png -r 100 -singlefile verification/audit-test.pdf verification/audit
+          pdftotext -bbox verification/audit-test.pdf verification/audit.html
+          python3 - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('verification/audit.html').getroot()
+          words = root.findall('.//{*}word')
+          assert any(w.text == 'END-OF-REFERENCE' for w in words)
+          for page in root.findall('.//{*}page'):
+              for word in page.findall('.//{*}word'):
+                  assert 34 <= float(word.attrib['xMin']) < float(word.attrib['xMax']) <= float(page.attrib['width']) - 34
+                  assert 34 <= float(word.attrib['yMin']) < float(word.attrib['yMax']) <= float(page.attrib['height']) - 34
+          PYTHON
       - uses: actions/upload-artifact@v4
         with:
           name: signing-verification
