@@ -16,6 +16,7 @@ jobs:
         run: |
           docker create --name signing-test --entrypoint /app/bin/bundle signing-api exec ruby signing_api/test.rb
           docker start -a signing-test
+          docker run --rm --entrypoint /app/bin/bundle signing-api exec ruby signing_api/http_smoke.rb
           test "$(docker inspect signing-test --format '{{.State.ExitCode}}')" = 0
           mkdir -p verification
           docker cp signing-test:/tmp/signed-test.pdf verification/
